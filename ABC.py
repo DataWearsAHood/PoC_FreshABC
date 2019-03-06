@@ -1,12 +1,12 @@
-#!/usr/local/bin/python3
-#from __future__ import print_function
+#!/usr/local/bin/python
+from __future__ import print_function
 from unversioned import ABC_creds, SmoochCreds, SmoochAPI
 from datetime import datetime
 from time import mktime
 from flask import Flask, request#, url_for, send_from_directory
 from Crypto.Cipher import AES
 from Crypto.Util import Counter
-import requests, jwt, json, base64
+import requests, json, base64, jwt, binascii#, pyaes
 
 print("Starting!")
 #print(locals())
@@ -27,6 +27,10 @@ ABC_JWT_spec = {
     }
 }
 #print("JWT Params:", ABC_JWT_spec)
+# for Py3 (!?) - key must be in AbstractJWKBase (or subclass??)
+#jwt = JWT()
+#ABC_JWT = jwt.encode(ABC_JWT_spec['claims'], ABC_creds['apiSecret_b64'], ABC_JWT_spec['alg'])
+# for Py2
 ABC_JWT = jwt.encode(ABC_JWT_spec['claims'], base64.b64decode(ABC_creds['apiSecret_b64']), ABC_JWT_spec['alg'])
 #print("ABC_JWT:", ABC_JWT)
 
@@ -81,8 +85,8 @@ def getRefPayload(interactiveDataRef):
     # https://developer.apple.com/documentation/businesschat/enhancing_the_customer_s_user_experience/receiving_large_interactive_data_payloads
     # 1 - https://developer.apple.com/documentation/businesschat/handling_message_attachments/getting_the_attachment_s_url
     # 2 - get @ downloadUrl
-    # 3 - decrypt payload
-    # 4 - decode payload
+    # 3 - decrypt payload https://developer.apple.com/documentation/businesschat/handling_message_attachments/downloading_and_decrypting_the_attachment
+    # 4 - decode payload: https://developer.apple.com/documentation/businesschat/enhancing_the_customer_s_user_experience/decoding_interactive_data_payloads
     preDownloadHdr = {
         "authorization": "Bearer %s" % ABC_JWT,
         "source-id": ABC_creds['businessId'],
@@ -92,7 +96,7 @@ def getRefPayload(interactiveDataRef):
     }
     print (" > GET /preDownload: %s" % "https://mspgw.push.apple.com/v1/preDownload")
     print (preDownloadHdr)
-    # GET /preDownload -> downloadUrl
+    # 1 - GET /preDownload -> downloadUrl
     preDlResp = requests.get("https://mspgw.push.apple.com/v1/preDownload", headers=preDownloadHdr) # no body
     if preDlResp.status_code not in [200]:
         print (preDlResp, '\n', preDlResp.content)
@@ -101,41 +105,48 @@ def getRefPayload(interactiveDataRef):
         assetUrl = json.loads(preDlResp.content)['download-url']
         print (' > got url: "%s"' % assetUrl)
 
-    # GET downloadUrl -> encrypted payload
+    # 2 - GET downloadUrl -> encrypted payload
     getResp = requests.get(assetUrl)
     if getResp.status_code not in [200]:
         print (getResp, '\n', assetUrl, '\n\t', getResp.content)
         return "FAIL!: can't GET the Encrypted Payload"
     else:
         encryptedPayload = getResp.content
-        print (' > got data (%s bytes)' % len(encryptedPayload))
+        print (' > got encrypted data (%s bytes)' % len(encryptedPayload))
         #print(type(encryptedPayload), encryptedPayload[:100])
 
-    # decrypt payload
-    decryptionKey = interactiveDataRef['key']
+    # 3 - Decrypt payload
+    print (' > decrypting data...', end=" ")
+    decryptionKey = interactiveDataRef['key'][2:].decode('hex')
     decryptionIV = "0000000000000000" #all-zero, 16-byte initialization vector (IV)
-    # Create and initialise the counter
-    ctr = Counter.new(128, initial_value=int(decryptionIV.encode('hex'), 16))
 
-    # Create the AES cipher object and decrypt the ciphertext
-    cipher = AES.new(decryptionKey, AES.MODE_CTR, counter=ctr)
-    decryptedPayload = cipher.decrypt(encryptedPayload)
+    # https://github.com/ricmoo/pyaes
+    '''#print(len(decryptionKey), '\n', decryptionKey)
+    aes = pyaes.AESModeOfOperationCTR(decryptionKey)
+    decryptedPayload = aes.decrypt(encryptedPayload)'''
+    
+    # https://stackoverflow.com/questions/3154998/pycrypto-problem-using-aesctr
+    #iv = ciphertext[:16]
+    ctr = Counter.new(128, initial_value=int(binascii.hexlify(decryptionIV), 16))
+    aes = AES.new(decryptionKey, AES.MODE_CTR, counter=ctr)
+    decryptedPayload = aes.decrypt(encryptedPayload)
+    print ("Done!")
     print(decryptedPayload[:100])
-    '''    # Decrypt the data
 
-        # Recover the IV from the ciphertext
-        ctr_iv = logfile_ct[:16]  # AES counter block is 128 bits (16 bytes)
-
-        # Cut the IV off of the ciphertext
-        logfile_ct = logfile_ct[16:]
-
-        # Create and initialise the counter
-        ctr = Counter.new(128, initial_value=long(ctr_iv.encode('hex'), 16))
-
-        # Create the AES cipher object and decrypt the ciphertext
-        cipher = AES.new(encrypt_key, AES.MODE_CTR, counter=ctr)
-        logfile_pt = cipher.decrypt(logfile_ct)
-    '''
+    # 4 - Decode Payload
+    decodeHdr={
+        "authorization": "Bearer %s" % ABC_JWT,
+        "source-id": ABC_creds['businessId'],
+        "bid": "42"
+    }
+    decodeResp = requests.post("https://mspgw.push.apple.com/v1/decodePayload", headers=decodeHdr, data=decryptedPayload)
+    if decodeResp.status_code not in [200]:
+        print (decodeResp, '\n', assetUrl, '\n\t', decodeResp.content)
+        return "FAIL!: can't GET the Decoded Payload"
+    else:
+        decodedPayload = decodeResp.content
+        print (' > got decoded data (%s bytes)' % len(decodedPayload))
+        print(type(decodedPayload), decodedPayload[:100])
 
     return "WIP!"
 
