@@ -1,0 +1,10 @@
+X ABC send/receive
+- send listpicker
+- receive response: https://developer.apple.com/documentation/businesschat/enhancing_the_customer_s_user_experience/receiving_large_interactive_data_payloads
+    - GET @ /preDownload
+    - GET @ <download-URL>
+    - GET @ /decodePayload
+
+NOTES:
+- Messages on MacOS works for messages, not for listpickers?
+- XCode virtual device 'Timed out while checking availability of "(null)".'
