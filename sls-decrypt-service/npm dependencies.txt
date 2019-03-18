@@ -1,0 +1,1 @@
+npm install serverless-plugin-include-dependencies crypto request-promise-native stream concat-stream --save-dev
